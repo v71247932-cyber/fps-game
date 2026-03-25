@@ -1,0 +1,170 @@
+<!DOCTYPE html>
+<html lang="ro">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>FPS Arena - 3D Multiplayer Shooter</title>
+    <link rel="stylesheet" href="css/style.css">
+</head>
+<body>
+    <!-- Main Menu -->
+    <div id="main-menu" class="menu-screen">
+        <div class="menu-container">
+            <h1 class="game-title">FPS ARENA</h1>
+            <div class="menu-buttons">
+                <button id="btn-singleplayer" class="menu-btn">SINGLE PLAYER</button>
+                <button id="btn-multiplayer" class="menu-btn">MULTIPLAYER</button>
+                <button id="btn-settings" class="menu-btn">SETTINGS</button>
+            </div>
+        </div>
+    </div>
+
+    <!-- Map Selection -->
+    <div id="map-select" class="menu-screen hidden">
+        <div class="menu-container">
+            <h2>SELECT MAP</h2>
+            <div class="map-grid">
+                <div class="map-card" data-map="warehouse">
+                    <div class="map-preview warehouse-preview"></div>
+                    <h3>WAREHOUSE</h3>
+                    <p>Close quarters combat</p>
+                </div>
+                <div class="map-card" data-map="arena">
+                    <div class="map-preview arena-preview"></div>
+                    <h3>ARENA</h3>
+                    <p>Open arena battle</p>
+                </div>
+                <div class="map-card" data-map="fortress">
+                    <div class="map-preview fortress-preview"></div>
+                    <h3>FORTRESS</h3>
+                    <p>Multi-level fortress</p>
+                </div>
+            </div>
+            <div class="bot-settings">
+                <label>Number of Bots: <input type="range" id="bot-count" min="1" max="10" value="4"><span id="bot-count-display">4</span></label>
+                <label>Difficulty:
+                    <select id="bot-difficulty">
+                        <option value="easy">Easy</option>
+                        <option value="medium" selected>Medium</option>
+                        <option value="hard">Hard</option>
+                    </select>
+                </label>
+            </div>
+            <div class="menu-buttons">
+                <button id="btn-start-game" class="menu-btn">START GAME</button>
+                <button id="btn-back-map" class="menu-btn secondary">BACK</button>
+            </div>
+        </div>
+    </div>
+
+    <!-- Multiplayer Lobby -->
+    <div id="multiplayer-lobby" class="menu-screen hidden">
+        <div class="menu-container">
+            <h2>MULTIPLAYER</h2>
+            <div class="lobby-options">
+                <button id="btn-host" class="menu-btn">HOST GAME</button>
+                <div class="join-section">
+                    <input type="text" id="join-code" placeholder="Enter Room Code">
+                    <button id="btn-join" class="menu-btn">JOIN</button>
+                </div>
+            </div>
+            <div id="lobby-info" class="hidden">
+                <p>Room Code: <span id="room-code"></span></p>
+                <p>Players: <span id="player-count">1</span></p>
+                <div class="map-grid small">
+                    <div class="map-card small" data-map="warehouse">
+                        <div class="map-preview warehouse-preview"></div>
+                        <h3>WAREHOUSE</h3>
+                    </div>
+                    <div class="map-card small" data-map="arena">
+                        <div class="map-preview arena-preview"></div>
+                        <h3>ARENA</h3>
+                    </div>
+                    <div class="map-card small" data-map="fortress">
+                        <div class="map-preview fortress-preview"></div>
+                        <h3>FORTRESS</h3>
+                    </div>
+                </div>
+                <button id="btn-start-mp" class="menu-btn">START</button>
+            </div>
+            <button id="btn-back-lobby" class="menu-btn secondary">BACK</button>
+        </div>
+    </div>
+
+    <!-- Settings -->
+    <div id="settings-screen" class="menu-screen hidden">
+        <div class="menu-container">
+            <h2>SETTINGS</h2>
+            <div class="settings-list">
+                <label>Mouse Sensitivity: <input type="range" id="sensitivity" min="1" max="20" value="5"><span id="sens-display">5</span></label>
+                <label>Music Volume: <input type="range" id="music-vol" min="0" max="100" value="50"><span id="music-display">50</span></label>
+                <label>SFX Volume: <input type="range" id="sfx-vol" min="0" max="100" value="80"><span id="sfx-display">80</span></label>
+                <label>Player Name: <input type="text" id="player-name" value="Player" maxlength="16"></label>
+            </div>
+            <button id="btn-back-settings" class="menu-btn secondary">BACK</button>
+        </div>
+    </div>
+
+    <!-- Game HUD -->
+    <div id="game-hud" class="hidden">
+        <div id="crosshair">+</div>
+        <div id="health-bar">
+            <div id="health-fill"></div>
+            <span id="health-text">100</span>
+        </div>
+        <div id="ammo-display">
+            <span id="ammo-current">30</span> / <span id="ammo-total">120</span>
+        </div>
+        <div id="weapon-name">AK-47</div>
+        <div id="kill-feed"></div>
+        <div id="scoreboard" class="hidden">
+            <h2>SCOREBOARD</h2>
+            <table id="score-table">
+                <thead><tr><th>Name</th><th>Kills</th><th>Deaths</th></tr></thead>
+                <tbody id="score-body"></tbody>
+            </table>
+        </div>
+        <div id="damage-overlay"></div>
+        <div id="hit-marker" class="hidden">X</div>
+        <div id="minimap">
+            <canvas id="minimap-canvas" width="150" height="150"></canvas>
+        </div>
+        <div id="game-timer">5:00</div>
+        <div id="message-center"></div>
+    </div>
+
+    <!-- Pause Menu -->
+    <div id="pause-menu" class="menu-screen hidden">
+        <div class="menu-container">
+            <h2>PAUSED</h2>
+            <button id="btn-resume" class="menu-btn">RESUME</button>
+            <button id="btn-quit" class="menu-btn secondary">QUIT TO MENU</button>
+        </div>
+    </div>
+
+    <!-- Game Over -->
+    <div id="game-over" class="menu-screen hidden">
+        <div class="menu-container">
+            <h2 id="game-over-title">GAME OVER</h2>
+            <div id="final-scores"></div>
+            <button id="btn-play-again" class="menu-btn">PLAY AGAIN</button>
+            <button id="btn-menu" class="menu-btn secondary">MAIN MENU</button>
+        </div>
+    </div>
+
+    <!-- Game Canvas -->
+    <canvas id="game-canvas"></canvas>
+
+    <!-- Scripts -->
+    <script src="https://cdnjs.cloudflare.com/ajax/libs/three.js/r128/three.min.js"></script>
+    <script src="js/audio.js"></script>
+    <script src="js/weapons.js"></script>
+    <script src="js/maps.js"></script>
+    <script src="js/physics.js"></script>
+    <script src="js/player.js"></script>
+    <script src="js/bot.js"></script>
+    <script src="js/networking.js"></script>
+    <script src="js/game.js"></script>
+    <script src="js/main.js"></script>
+</body>
+</html>
