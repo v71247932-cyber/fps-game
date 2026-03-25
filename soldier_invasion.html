@@ -489,24 +489,26 @@ function addRemotePlayer(id,data){
   const mat=new THREE.MeshStandardMaterial({color,roughness:0.7});
   const hMat=new THREE.MeshStandardMaterial({color:0xDEB887});
 
+  // Model offset so head aligns with camera height (2.5)
+  const mOff=-0.85;
   // Body
   const body=new THREE.Mesh(new THREE.BoxGeometry(1.2,2,0.8),mat);
-  body.position.y=2;body.castShadow=true;group.add(body);
+  body.position.y=2+mOff;body.castShadow=true;group.add(body);
   // Head
   const head=new THREE.Mesh(new THREE.BoxGeometry(0.7,0.7,0.7),hMat);
-  head.position.y=3.35;head.castShadow=true;group.add(head);
+  head.position.y=3.35+mOff;head.castShadow=true;group.add(head);
   // Helmet
   const helmet=new THREE.Mesh(new THREE.BoxGeometry(0.8,0.4,0.8),new THREE.MeshStandardMaterial({color:0x333333}));
-  helmet.position.y=3.85;group.add(helmet);
+  helmet.position.y=3.85+mOff;group.add(helmet);
   // Legs
   [-0.3,0.3].forEach(xo=>{
     const leg=new THREE.Mesh(new THREE.BoxGeometry(0.4,1,0.4),new THREE.MeshStandardMaterial({color:0x4a3728}));
-    leg.position.set(xo,0.5,0);group.add(leg);
+    leg.position.set(xo,0.5+mOff,0);group.add(leg);
   });
   // Arms
   [-0.8,0.8].forEach(xo=>{
     const arm=new THREE.Mesh(new THREE.BoxGeometry(0.35,1.5,0.35),mat);
-    arm.position.set(xo,2,0);group.add(arm);
+    arm.position.set(xo,2+mOff,0);group.add(arm);
   });
   // Gun
   const gun=new THREE.Mesh(new THREE.BoxGeometry(0.15,0.15,1.5),new THREE.MeshStandardMaterial({color:0x222222}));
@@ -524,7 +526,7 @@ function addRemotePlayer(id,data){
     new THREE.PlaneGeometry(3,0.75),
     new THREE.MeshBasicMaterial({map:tex,transparent:true,depthTest:false})
   );
-  nameMesh.position.y=4.5;
+  nameMesh.position.y=4.8;
   group.add(nameMesh);
 
   group.position.set(data.x||0,0,data.z||80);
