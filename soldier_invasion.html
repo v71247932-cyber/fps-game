@@ -159,37 +159,27 @@ canvas{display:block}
 
 <div id="damage-overlay"></div>
 
+<script src="https://unpkg.com/peerjs@1.5.4/dist/peerjs.min.js"></script>
 <script src="https://cdnjs.cloudflare.com/ajax/libs/three.js/r128/three.min.js"></script>
 <script>
-// ===================== FIREBASE REST API (no SDK needed) =====================
-const DB_URL='https://fps-game-ba4d4-default-rtdb.europe-west1.firebasedatabase.app';
-
-// Simple Firebase REST helpers
-function fbSet(path,data){return fetch(DB_URL+'/'+path+'.json',{method:'PUT',body:JSON.stringify(data)}).then(r=>r.json());}
-function fbUpdate(path,data){return fetch(DB_URL+'/'+path+'.json',{method:'PATCH',body:JSON.stringify(data)}).then(r=>r.json());}
-function fbGet(path){return fetch(DB_URL+'/'+path+'.json').then(r=>r.json());}
-function fbDelete(path){return fetch(DB_URL+'/'+path+'.json',{method:'DELETE'});}
-// SSE listener for real-time updates
-function fbListen(path,callback){
-  const es=new EventSource(DB_URL+'/'+path+'.json?orderBy="$key"');
-  es.addEventListener('put',e=>{const d=JSON.parse(e.data);callback(d.path,d.data);});
-  es.addEventListener('patch',e=>{const d=JSON.parse(e.data);callback(d.path,d.data);});
-  return es;
-}
-let roomEventSource=null;
-
-// Multiplayer state
+// ===================== PEERJS P2P MULTIPLAYER =====================
 let isMultiplayer = false;
 let roomCode = null;
+let isHost = false;
 let myPlayerId = 'p_' + Math.random().toString(36).substr(2,9);
 let myPlayerName = 'Player ' + Math.floor(Math.random()*999);
-let otherPlayers = {}; // {id: {mesh, data, targetPos, targetRot}}
+let otherPlayers = {};
 let myDeaths = 0;
+let peer = null;
+let connections = {}; // peerId -> DataConnection
+let hostConn = null; // client's connection to host
+let roomMapIdx = 0;
 const PLAYER_COLORS = [0x3498db, 0xe74c3c, 0x2ecc71, 0xf39c12, 0x9b59b6, 0x1abc9c, 0xe67e22, 0xecf0f1];
+const PEER_PREFIX = 'fpsgame_';
 
-// URL routing - check if URL has /XXXX room code
+// URL routing
 function checkURLRoom(){
-  const path = window.location.pathname.replace(/\//g,'');
+  const path=window.location.pathname.replace(/\//g,'');
   if(/^\d{4}$/.test(path)){
     document.getElementById('main-menu').style.display='none';
     joinRoom(path);
@@ -198,7 +188,6 @@ function checkURLRoom(){
   return false;
 }
 
-// Main menu functions
 function startCampaign(){
   isMultiplayer=false;
   document.getElementById('main-menu').style.display='none';
@@ -213,13 +202,10 @@ function showCreateRoom(){
   document.getElementById('room-code-display').style.display='none';
   document.getElementById('join-input-area').style.display='none';
   document.getElementById('room-go-btn').style.display='none';
-  document.getElementById('room-info').textContent='Selectează o hartă pentru room-ul tău';
+  document.getElementById('room-info').textContent='Selectează o hartă';
   document.getElementById('room-players').innerHTML='';
-
-  // Show map selection
   const ms=document.getElementById('map-select');
-  ms.style.display='flex';
-  ms.innerHTML='';
+  ms.style.display='flex';ms.innerHTML='';
   LEVELS.forEach((lv,i)=>{
     const card=document.createElement('div');
     card.className='level-card';
@@ -247,139 +233,191 @@ function showJoinRoom(){
 function backToMenu(){
   document.getElementById('room-screen').style.display='none';
   document.getElementById('main-menu').style.display='flex';
-  if(roomCode){
-    fbDelete('rooms/'+roomCode+'/players/'+myPlayerId);
-    if(roomEventSource){roomEventSource.close();roomEventSource=null;}
-  }
-  roomCode=null;
+  if(peer){peer.destroy();peer=null;}
+  connections={};hostConn=null;roomCode=null;
 }
 
 function roomAction(){
   const btn=document.getElementById('room-go-btn');
   if(btn.textContent==='INTRĂ'){
     const code=document.getElementById('room-input').value.trim();
-    if(code.length===4 && /^\d{4}$/.test(code)){
-      joinRoom(code);
-    } else {
-      document.getElementById('room-info').textContent='Codul trebuie să aibă 4 cifre!';
-    }
+    if(code.length===4&&/^\d{4}$/.test(code)) joinRoom(code);
+    else document.getElementById('room-info').textContent='Codul trebuie să aibă 4 cifre!';
   } else if(btn.textContent==='START JOC'){
     startMultiplayerGame();
   }
 }
 
+// HOST creates room
 function createRoom(mapIdx){
   roomCode=String(Math.floor(1000+Math.random()*9000));
+  roomMapIdx=mapIdx;
+  isHost=true;
 
-  fbSet('rooms/'+roomCode,{
-    map:mapIdx, host:myPlayerId, state:'waiting', created:Date.now(),
-    players:{[myPlayerId]:{
-      name:myPlayerName, x:0, y:2.5, z:80, rx:0, ry:0,
-      health:100, kills:0, deaths:0, weapon:'ak47', alive:true, lastUpdate:Date.now()
-    }}
-  }).then(()=>{
-    document.getElementById('map-select').style.display='none';
+  document.getElementById('map-select').style.display='none';
+  document.getElementById('room-title').textContent='Se creează...';
+  document.getElementById('room-info').textContent='Se conectează la server...';
+
+  // Create PeerJS with room code as ID
+  peer=new Peer(PEER_PREFIX+roomCode,{debug:0});
+  peer.on('open',id=>{
     document.getElementById('room-title').textContent='ROOM CREAT';
     document.getElementById('room-code-display').style.display='block';
     document.getElementById('room-code-display').textContent=roomCode;
     document.getElementById('room-info').innerHTML='Trimite codul sau link:<br><b style="color:#3498db">'+window.location.origin+'/'+roomCode+'</b>';
     document.getElementById('room-go-btn').style.display='inline-block';
     document.getElementById('room-go-btn').textContent='START JOC';
-    listenRoomPlayers();
-  }).catch(e=>{
-    document.getElementById('room-info').textContent='Eroare: '+e.message;
+    document.getElementById('room-players').innerHTML='Jucători (1):<br><span>'+myPlayerName+' (Host)</span>';
+  });
+  peer.on('error',e=>{
+    if(e.type==='unavailable-id'){
+      document.getElementById('room-info').textContent='Codul '+roomCode+' e deja folosit. Încearcă din nou.';
+    } else {
+      document.getElementById('room-info').textContent='Eroare: '+e.message;
+    }
+  });
+
+  // Host listens for connections
+  peer.on('connection',conn=>{
+    conn.on('open',()=>{
+      connections[conn.peer]=conn;
+      conn.on('data',d=>hostHandleData(conn.peer,d));
+      conn.on('close',()=>{
+        delete connections[conn.peer];
+        removeRemotePlayer(conn.peer);
+        broadcastFromHost({type:'leave',id:conn.peer});
+        updatePlayerListUI();
+      });
+      // Send game info
+      conn.send({type:'welcome',map:roomMapIdx,host:myPlayerId,playing:isLocked});
+      // Tell existing players about new one
+      updatePlayerListUI();
+    });
   });
 }
 
+function hostHandleData(fromId,d){
+  if(d.type==='pos'){
+    // Relay position to all other clients
+    d.id=fromId;
+    Object.entries(connections).forEach(([pid,c])=>{
+      if(pid!==fromId)c.send(d);
+    });
+    // Update on host screen too
+    if(!otherPlayers[fromId])addRemotePlayer(fromId,d);
+    else updateRemotePlayer(fromId,d);
+  } else if(d.type==='hit'){
+    // Client says they hit someone
+    Object.entries(connections).forEach(([pid,c])=>c.send(d));
+    if(d.target===myPlayerId) handleGotHit(d.dmg);
+  } else if(d.type==='info'){
+    d.id=fromId;
+    Object.entries(connections).forEach(([pid,c])=>{if(pid!==fromId)c.send(d);});
+    updatePlayerListUI();
+  }
+}
+
+// CLIENT joins room
 function joinRoom(code){
   roomCode=code;
+  isHost=false;
 
-  // Show room screen immediately
   document.getElementById('main-menu').style.display='none';
   document.getElementById('room-screen').style.display='flex';
   document.getElementById('join-input-area').style.display='none';
   document.getElementById('map-select').style.display='none';
   document.getElementById('room-title').textContent='Se conectează...';
-  document.getElementById('room-info').textContent='Se caută room-ul '+code+'...';
+  document.getElementById('room-info').textContent='Se caută room '+code+'...';
   document.getElementById('room-code-display').style.display='none';
   document.getElementById('room-go-btn').style.display='none';
 
-  fbGet('rooms/'+roomCode).then(data=>{
-    if(!data){
-      document.getElementById('room-title').textContent='EROARE';
-      document.getElementById('room-info').textContent='Room-ul '+code+' nu există!';
-      return;
-    }
-
-    // Add self
-    fbSet('rooms/'+roomCode+'/players/'+myPlayerId,{
-      name:myPlayerName, x:0, y:2.5, z:80, rx:0, ry:0,
-      health:100, kills:0, deaths:0, weapon:'ak47', alive:true, lastUpdate:Date.now()
+  peer=new Peer(PEER_PREFIX+code+'_'+myPlayerId,{debug:0});
+  peer.on('open',()=>{
+    hostConn=peer.connect(PEER_PREFIX+code,{reliable:true});
+    hostConn.on('open',()=>{
+      hostConn.send({type:'info',name:myPlayerName});
+      document.getElementById('room-title').textContent='ROOM '+code;
+      document.getElementById('room-code-display').style.display='block';
+      document.getElementById('room-code-display').textContent=code;
+      document.getElementById('room-info').textContent='Conectat! Așteptăm host-ul...';
     });
-
-    document.getElementById('room-title').textContent='ROOM '+roomCode;
-    document.getElementById('room-code-display').style.display='block';
-    document.getElementById('room-code-display').textContent=roomCode;
-    const mapName=LEVELS[data.map]?LEVELS[data.map].name:'???';
-    document.getElementById('room-info').textContent='Hartă: '+mapName+' | Așteptăm host-ul să pornească...';
-
-    if(data.state==='playing'){
-      isMultiplayer=true;
-      document.getElementById('room-screen').style.display='none';
-      startMultiplayerDirect(data.map);
-      return;
-    }
-
-    document.getElementById('room-go-btn').style.display='none';
-    listenRoomPlayers();
-    // Poll for game start
-    const pollStart=setInterval(()=>{
-      fbGet('rooms/'+roomCode+'/state').then(st=>{
-        if(st==='playing'){
-          clearInterval(pollStart);
-          fbGet('rooms/'+roomCode+'/map').then(m=>{
-            isMultiplayer=true;
-            document.getElementById('room-screen').style.display='none';
-            document.getElementById('main-menu').style.display='none';
-            startMultiplayerDirect(m);
-          });
-        }
-      });
-    },1000);
+    hostConn.on('data',d=>clientHandleData(d));
+    hostConn.on('close',()=>{
+      document.getElementById('room-info').textContent='Host-ul s-a deconectat!';
+    });
+    hostConn.on('error',e=>{
+      document.getElementById('room-title').textContent='EROARE';
+      document.getElementById('room-info').textContent='Nu s-a găsit room '+code;
+    });
+  });
+  peer.on('error',e=>{
+    document.getElementById('room-title').textContent='EROARE';
+    document.getElementById('room-info').textContent='Nu s-a găsit room '+code+'. Verifică codul.';
   });
 }
 
-function listenRoomPlayers(){
-  // Poll player list every 2s
-  const pollP=setInterval(()=>{
-    if(!roomCode){clearInterval(pollP);return;}
-    fbGet('rooms/'+roomCode+'/players').then(players=>{
-      if(!players)return;
-      const count=Object.keys(players).length;
-      let html='Jucători ('+count+'):<br>';
-      Object.values(players).forEach(p=>{html+='<span>'+(p.name||'?')+'</span> ';});
-      document.getElementById('room-players').innerHTML=html;
-    });
-  },2000);
+function clientHandleData(d){
+  if(d.type==='welcome'){
+    roomMapIdx=d.map;
+    document.getElementById('room-info').textContent='Hartă: '+LEVELS[d.map].name+' | Așteptăm...';
+    if(d.playing) startMultiplayerDirect(d.map);
+  } else if(d.type==='start'){
+    isMultiplayer=true;
+    document.getElementById('room-screen').style.display='none';
+    startMultiplayerDirect(d.map);
+  } else if(d.type==='pos'){
+    if(!otherPlayers[d.id])addRemotePlayer(d.id,d);
+    else updateRemotePlayer(d.id,d);
+  } else if(d.type==='hostpos'){
+    const hid='host';
+    if(!otherPlayers[hid])addRemotePlayer(hid,d);
+    else updateRemotePlayer(hid,d);
+  } else if(d.type==='hit'&&d.target===myPlayerId){
+    handleGotHit(d.dmg);
+  } else if(d.type==='leave'){
+    removeRemotePlayer(d.id);
+  }
+}
+
+function handleGotHit(dmg){
+  state.health-=dmg;if(state.health<0)state.health=0;
+  updateHUD();
+  const ov=document.getElementById('damage-overlay');
+  ov.style.border='15px solid rgba(255,0,0,0.5)';
+  setTimeout(()=>{ov.style.border='0px solid rgba(255,0,0,0)'},200);
+  if(state.health<=0&&!state.gameOver){
+    state.gameOver=true;myDeaths++;
+    showMessage('AI MURIT!\nRespawn în 5s...','#ff0000',4000);
+    setTimeout(()=>mpRespawn(),5000);
+  }
+}
+
+function updatePlayerListUI(){
+  let count=1+Object.keys(connections).length;
+  let html='Jucători ('+count+'):<br><span>'+myPlayerName+' (Host)</span> ';
+  Object.keys(connections).forEach(pid=>{
+    const p=otherPlayers[pid];
+    html+='<span>'+(p&&p.data?p.data.name:'Player')+'</span> ';
+  });
+  document.getElementById('room-players').innerHTML=html;
 }
 
 function startMultiplayerGame(){
-  fbUpdate('rooms/'+roomCode,{state:'playing'});
   isMultiplayer=true;
   document.getElementById('room-screen').style.display='none';
-  fbGet('rooms/'+roomCode+'/map').then(m=>{
-    startMultiplayerDirect(m);
-  });
+  // Tell all clients to start
+  Object.values(connections).forEach(c=>c.send({type:'start',map:roomMapIdx}));
+  startMultiplayerDirect(roomMapIdx);
 }
 
 function startMultiplayerDirect(mapIdx){
+  isMultiplayer=true;
   state.currentLevel=mapIdx;
-  state.health=state.maxHealth;
-  state.ammo=state.maxAmmo;
+  state.health=state.maxHealth;state.ammo=state.maxAmmo;
   state.score=0;state.kills=0;myDeaths=0;
   state.gameOver=false;state.won=false;
   state.reloading=false;state.canShoot=true;
-  pendingLevelLoad=mapIdx; // THIS loads the level when pointer lock is acquired
+  pendingLevelLoad=mapIdx;
   document.getElementById('blocker').style.display='flex';
   document.getElementById('blocker').querySelector('h1').textContent='MULTIPLAYER';
   document.getElementById('blocker').querySelector('.subtitle').textContent=LEVELS[mapIdx].name+' | Room '+roomCode;
@@ -388,63 +426,32 @@ function startMultiplayerDirect(mapIdx){
   document.getElementById('enemies-left').innerHTML='ROOM: <span style="color:#3498db">'+roomCode+'</span>';
 }
 
-// Sync my position to Firebase (send)
-let mpSendInterval=null, mpRecvInterval=null;
+// P2P sync
+let mpSendInterval=null;
 function startMPSync(){
   if(mpSendInterval)clearInterval(mpSendInterval);
-  if(mpRecvInterval)clearInterval(mpRecvInterval);
-
-  // Send my position every 100ms
   mpSendInterval=setInterval(()=>{
-    if(!roomCode||!isMultiplayer||!isLocked)return;
-    fbUpdate('rooms/'+roomCode+'/players/'+myPlayerId,{
+    if(!isMultiplayer||!isLocked)return;
+    const posData={
+      type:isHost?'hostpos':'pos',
+      name:myPlayerName,
       x:+camera.position.x.toFixed(2),
       y:+camera.position.y.toFixed(2),
       z:+camera.position.z.toFixed(2),
       rx:+euler.x.toFixed(3),
       ry:+euler.y.toFixed(3),
-      health:state.health,
-      kills:state.kills,
-      deaths:myDeaths,
+      health:state.health,kills:state.kills,deaths:myDeaths,
       weapon:currentWeapon,
-      alive:!state.gameOver||state.won,
-      lastUpdate:Date.now()
-    });
-  },100);
-
-  // Receive other players every 100ms
-  mpRecvInterval=setInterval(()=>{
-    if(!roomCode||!isMultiplayer)return;
-    fbGet('rooms/'+roomCode+'/players').then(players=>{
-      if(!players)return;
-      const currentIds=new Set();
-      Object.entries(players).forEach(([id,data])=>{
-        if(id===myPlayerId){
-          // Check if someone damaged me
-          if(data.health<state.health && data.health>=0){
-            state.health=data.health;
-            updateHUD();
-            const ov=document.getElementById('damage-overlay');
-            ov.style.border='15px solid rgba(255,0,0,0.5)';
-            setTimeout(()=>{ov.style.border='0px solid rgba(255,0,0,0)'},200);
-            if(state.health<=0&&!state.gameOver){
-              state.gameOver=true;myDeaths++;
-              showMessage('AI MURIT!\nRespawn în 5s...','#ff0000',4000);
-              setTimeout(()=>mpRespawn(),5000);
-            }
-          }
-          return;
-        }
-        currentIds.add(id);
-        if(!otherPlayers[id])addRemotePlayer(id,data);
-        else updateRemotePlayer(id,data);
-      });
-      // Remove players that left
-      Object.keys(otherPlayers).forEach(id=>{
-        if(!currentIds.has(id))removeRemotePlayer(id);
-      });
-    });
-  },100);
+      alive:!state.gameOver||state.won
+    };
+    if(isHost){
+      // Host sends to all clients
+      Object.values(connections).forEach(c=>c.send(posData));
+    } else if(hostConn){
+      // Client sends to host (host relays)
+      hostConn.send(posData);
+    }
+  },50);
 }
 
 function mpRespawn(){
@@ -559,24 +566,18 @@ function mpShootCheck(rc){
       const dmg=isHead?baseDmg*2.5:baseDmg+Math.random()*10;
       spawnParticles(hit.point,0xff0000,5);
 
-      // Reduce other player's health in Firebase
-      fbGet('rooms/'+roomCode+'/players/'+pid).then(pd=>{
-        if(!pd||!pd.alive)return;
-        let newHP=pd.health-dmg;
-        if(newHP<=0){
-          newHP=0;
-          state.kills++;
-          updateHUD();
-          addKillFeedEntry(isHead);
-          setTimeout(()=>{
-            fbUpdate('rooms/'+roomCode+'/players/'+pid,{health:100,alive:true,
-              x:Math.cos(Math.random()*6.28)*40,
-              z:Math.sin(Math.random()*6.28)*40
-            });
-          },5000);
-        }
-        fbUpdate('rooms/'+roomCode+'/players/'+pid,{health:newHP,alive:newHP>0});
-      });
+      // Send hit via P2P
+      const hitMsg={type:'hit',target:pid,dmg,isHead};
+      if(isHost){
+        // Host applies damage directly and relays
+        Object.values(connections).forEach(c=>c.send(hitMsg));
+        if(pid==='host') handleGotHit(dmg); // shouldn't happen but safety
+      } else if(hostConn){
+        hostConn.send(hitMsg);
+      }
+      state.kills++;
+      updateHUD();
+      addKillFeedEntry(isHead);
       return true;
     }
   }
@@ -585,17 +586,18 @@ function mpShootCheck(rc){
 
 // Scoreboard
 function updateScoreboard(){
-  if(!isMultiplayer||!roomCode)return;
-  fbGet('rooms/'+roomCode+'/players').then(players=>{
-    if(!players)return;
-    const body=document.getElementById('sb-body');
-    body.innerHTML='';
-    Object.entries(players).forEach(([id,p])=>{
-      const tr=document.createElement('tr');
-      if(id===myPlayerId)tr.className='me';
-      tr.innerHTML='<td>'+(p.name||'???')+'</td><td>'+(p.kills||0)+'</td><td>'+(p.deaths||0)+'</td>';
-      body.appendChild(tr);
-    });
+  if(!isMultiplayer)return;
+  const body=document.getElementById('sb-body');
+  body.innerHTML='';
+  // Me
+  const myTr=document.createElement('tr');myTr.className='me';
+  myTr.innerHTML='<td>'+myPlayerName+'</td><td>'+state.kills+'</td><td>'+myDeaths+'</td>';
+  body.appendChild(myTr);
+  // Others
+  Object.entries(otherPlayers).forEach(([id,p])=>{
+    const tr=document.createElement('tr');
+    tr.innerHTML='<td>'+(p.data&&p.data.name||'Player')+'</td><td>'+(p.data&&p.data.kills||0)+'</td><td>'+(p.data&&p.data.deaths||0)+'</td>';
+    body.appendChild(tr);
   });
 }
 
