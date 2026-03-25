@@ -308,9 +308,11 @@ function hostHandleData(fromId,d){
     if(!otherPlayers[fromId])addRemotePlayer(fromId,d);
     else updateRemotePlayer(fromId,d);
   } else if(d.type==='hit'){
-    // Relay hit to all
     Object.entries(connections).forEach(([pid,c])=>{try{c.send(d);}catch(e){}});
     if(d.target==='host'||d.target===myPlayerId) handleGotHit(d.dmg);
+  } else if(d.type==='win'){
+    Object.entries(connections).forEach(([pid,c])=>{try{c.send(d);}catch(e){}});
+    mpLose(d.winner,d.kills);
   } else if(d.type==='info'){
     d.id=fromId;
     if(!otherPlayers[fromId])addRemotePlayer(fromId,{name:d.name,x:0,y:2.5,z:80,alive:true});
@@ -376,9 +378,10 @@ function clientHandleData(d){
     if(!otherPlayers['host'])addRemotePlayer('host',d);
     else updateRemotePlayer('host',d);
   } else if(d.type==='hit'){
-    // Check if I'm the target (by my peer ID or playerId)
     const myPeerId=peer?peer.id:'';
     if(d.target===myPlayerId||d.target===myPeerId||d.target==='host')handleGotHit(d.dmg);
+  } else if(d.type==='win'){
+    mpLose(d.winner,d.kills);
   } else if(d.type==='leave'){
     removeRemotePlayer(d.id);
   } else if(d.type==='info'){
@@ -438,6 +441,8 @@ function startMultiplayerDirect(mapIdx){
   document.getElementById('blocker').querySelector('.start-btn').textContent='▶ Click pentru a intra ◀';
   blockerMode='start';
   document.getElementById('enemies-left').innerHTML='ROOM: <span style="color:#3498db">'+roomCode+'</span>';
+  document.getElementById('score-display').innerHTML='KILLS: <span id="score-val">0</span> / 10';
+  document.getElementById('level-display').textContent='DEATHS: 0';
 }
 
 // P2P sync
@@ -478,6 +483,25 @@ function mpRespawn(){
   }
   updateHUD();
   showMessage('RESPAWN!','#3498db',1000);
+}
+
+function mpWin(){
+  state.gameOver=true;state.won=true;
+  // Tell everyone
+  const winMsg={type:'win',winner:myPlayerName,kills:state.kills};
+  if(isHost){
+    Object.values(connections).forEach(c=>{try{c.send(winMsg);}catch(e){}});
+  } else if(hostConn){
+    hostConn.send(winMsg);
+  }
+  showMessage('VICTORIE!\n'+myPlayerName+' a câștigat!\nScor: '+state.kills+' - '+myDeaths,'#ffd700',999999);
+  document.exitPointerLock();
+}
+
+function mpLose(winnerName,winnerKills){
+  state.gameOver=true;
+  showMessage(winnerName+' A CÂȘTIGAT!\nScor: '+winnerKills+' kills','#ff4444',999999);
+  document.exitPointerLock();
 }
 
 // Remote player rendering
@@ -597,6 +621,10 @@ function mpShootCheck(rc){
       state.kills++;
       updateHUD();
       addKillFeedEntry(isHead);
+      // Check win condition - first to 10
+      if(state.kills>=10){
+        mpWin();
+      }
       return true;
     }
   }
@@ -2120,7 +2148,12 @@ function updateHUD(){
   document.getElementById('hp-fill').style.width=(state.health/state.maxHealth*100)+'%';
   document.getElementById('ammo-count').textContent=state.ammo;
   document.getElementById('ammo-max').textContent=state.maxAmmo;
-  document.getElementById('score-val').textContent=state.score;
+  if(isMultiplayer){
+    document.getElementById('score-val').textContent=state.kills;
+    document.getElementById('level-display').textContent='DEATHS: '+myDeaths;
+  } else {
+    document.getElementById('score-val').textContent=state.score;
+  }
 }
 
 function updateEnemyCount(){
