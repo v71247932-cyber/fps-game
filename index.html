@@ -2047,7 +2047,8 @@ function enemyShoot(enemy){
   const dirNorm=dir.clone().normalize();
   const distToPlayer=camera.position.distanceTo(start);
   const wallRC=new THREE.Raycaster(start,dirNorm,0.1,distToPlayer);
-  const wallBlock=wallRC.intersectObjects(wallMeshList);
+  const allSolid=levelMeshes.filter(m=>m.isMesh&&m.geometry&&m.geometry.type!=='PlaneGeometry');
+  const wallBlock=wallRC.intersectObjects(allSolid);
   if(wallBlock.length>0){
     // Bullet hit wall - no damage to player
     spawnParticles(wallBlock[0].point,0xffaa44,2);
@@ -2261,6 +2262,23 @@ function raycastWalls(origin,dir,maxDist){
   return hits.length>0?hits[0]:null;
 }
 
+function checkLOS(fromPos,toPos,dist){
+  // Check line of sight at 3 different heights
+  const heights=[1,2,3];
+  for(let h of heights){
+    const from=new THREE.Vector3(fromPos.x,h,fromPos.z);
+    const to=new THREE.Vector3(toPos.x,h,toPos.z);
+    const dir=new THREE.Vector3().subVectors(to,from).normalize();
+    const d=from.distanceTo(to);
+    const rc=new THREE.Raycaster(from,dir,0,d);
+    // Check against ALL solid meshes, not just wallMeshList
+    const allSolid=levelMeshes.filter(m=>m.isMesh&&m.geometry&&m.geometry.type!=='PlaneGeometry');
+    const hits=rc.intersectObjects(allSolid);
+    if(hits.length>0)return false;
+  }
+  return true;
+}
+
 function enemyBlocked(enemy,moveDir,moveAmt){
   const pos=enemy.mesh.position;
   // Bounding box check at destination
@@ -2331,13 +2349,10 @@ function animate(){
     const toPlayer=new THREE.Vector3().subVectors(camera.position,enemy.mesh.position);
     toPlayer.y=0;
 
-    // Check line of sight before changing state
+    // Check line of sight before changing state - multiple height checks
     let canSeePlayer=false;
     if(dist<50){
-      const ePos=new THREE.Vector3(enemy.mesh.position.x,2,enemy.mesh.position.z);
-      const toP=new THREE.Vector3().subVectors(camera.position,ePos).normalize();
-      const losRC=new THREE.Raycaster(ePos,toP,0.5,dist);
-      canSeePlayer=losRC.intersectObjects(wallMeshList).length===0;
+      canSeePlayer=checkLOS(enemy.mesh.position,camera.position,dist);
     }
     if(canSeePlayer&&dist<40)enemy.state='chase';
     if(canSeePlayer&&dist<30)enemy.state='attack';
@@ -2365,12 +2380,7 @@ function animate(){
       }
       enemy.shootTimer-=delta;
       if(enemy.shootTimer<=0&&dist<50){
-        // Line of sight check - only shoot if no wall between enemy and player
-        const ePos=new THREE.Vector3(enemy.mesh.position.x,2,enemy.mesh.position.z);
-        const toP=new THREE.Vector3().subVectors(camera.position,ePos).normalize();
-        const losRC=new THREE.Raycaster(ePos,toP,0.5,dist);
-        const losBlock=losRC.intersectObjects(wallMeshList);
-        if(losBlock.length===0){
+        if(canSeePlayer){
           enemyShoot(enemy);
         }
         enemy.shootTimer=enemy.shootInterval;
