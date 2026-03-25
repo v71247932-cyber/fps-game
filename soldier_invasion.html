@@ -159,32 +159,32 @@ canvas{display:block}
 
 <div id="damage-overlay"></div>
 
-<script src="https://www.gstatic.com/firebasejs/9.23.0/firebase-app-compat.js"></script>
-<script src="https://www.gstatic.com/firebasejs/9.23.0/firebase-database-compat.js"></script>
 <script src="https://cdnjs.cloudflare.com/ajax/libs/three.js/r128/three.min.js"></script>
 <script>
-// ===================== FIREBASE + MULTIPLAYER =====================
-const firebaseConfig = {
-  apiKey: "AIzaSyDummyKeyWillWork",
-  authDomain: "fps-game-ba4d4.firebaseapp.com",
-  databaseURL: "https://fps-game-ba4d4-default-rtdb.europe-west1.firebasedatabase.app",
-  projectId: "fps-game-ba4d4",
-  storageBucket: "fps-game-ba4d4.appspot.com",
-  messagingSenderId: "000000000000",
-  appId: "1:000000000000:web:0000000000000000"
-};
-firebase.initializeApp(firebaseConfig);
-const db = firebase.database();
+// ===================== FIREBASE REST API (no SDK needed) =====================
+const DB_URL='https://fps-game-ba4d4-default-rtdb.europe-west1.firebasedatabase.app';
+
+// Simple Firebase REST helpers
+function fbSet(path,data){return fetch(DB_URL+'/'+path+'.json',{method:'PUT',body:JSON.stringify(data)}).then(r=>r.json());}
+function fbUpdate(path,data){return fetch(DB_URL+'/'+path+'.json',{method:'PATCH',body:JSON.stringify(data)}).then(r=>r.json());}
+function fbGet(path){return fetch(DB_URL+'/'+path+'.json').then(r=>r.json());}
+function fbDelete(path){return fetch(DB_URL+'/'+path+'.json',{method:'DELETE'});}
+// SSE listener for real-time updates
+function fbListen(path,callback){
+  const es=new EventSource(DB_URL+'/'+path+'.json?orderBy="$key"');
+  es.addEventListener('put',e=>{const d=JSON.parse(e.data);callback(d.path,d.data);});
+  es.addEventListener('patch',e=>{const d=JSON.parse(e.data);callback(d.path,d.data);});
+  return es;
+}
+let roomEventSource=null;
 
 // Multiplayer state
 let isMultiplayer = false;
 let roomCode = null;
 let myPlayerId = 'p_' + Math.random().toString(36).substr(2,9);
 let myPlayerName = 'Player ' + Math.floor(Math.random()*999);
-let roomRef = null;
 let otherPlayers = {}; // {id: {mesh, data, targetPos, targetRot}}
 let myDeaths = 0;
-let syncInterval = null;
 const PLAYER_COLORS = [0x3498db, 0xe74c3c, 0x2ecc71, 0xf39c12, 0x9b59b6, 0x1abc9c, 0xe67e22, 0xecf0f1];
 
 // URL routing - check if URL has /XXXX room code
@@ -247,10 +247,9 @@ function showJoinRoom(){
 function backToMenu(){
   document.getElementById('room-screen').style.display='none';
   document.getElementById('main-menu').style.display='flex';
-  if(roomRef){
-    roomRef.child('players/'+myPlayerId).remove();
-    roomRef.off();
-    roomRef=null;
+  if(roomCode){
+    fbDelete('rooms/'+roomCode+'/players/'+myPlayerId);
+    if(roomEventSource){roomEventSource.close();roomEventSource=null;}
   }
   roomCode=null;
 }
@@ -270,35 +269,22 @@ function roomAction(){
 }
 
 function createRoom(mapIdx){
-  // Generate random 4-digit code
   roomCode=String(Math.floor(1000+Math.random()*9000));
-  roomRef=db.ref('rooms/'+roomCode);
 
-  roomRef.set({
-    map:mapIdx,
-    host:myPlayerId,
-    state:'waiting',
-    created:Date.now()
-  }).then(()=>{
-    // Add self as player
-    roomRef.child('players/'+myPlayerId).set({
+  fbSet('rooms/'+roomCode,{
+    map:mapIdx, host:myPlayerId, state:'waiting', created:Date.now(),
+    players:{[myPlayerId]:{
       name:myPlayerName, x:0, y:2.5, z:80, rx:0, ry:0,
-      health:100, kills:0, deaths:0, weapon:'ak47', alive:true,
-      lastUpdate:Date.now()
-    });
-    // Remove player on disconnect
-    roomRef.child('players/'+myPlayerId).onDisconnect().remove();
-    // Remove room if empty after disconnect
-    roomRef.child('players').onDisconnect().remove();
-
+      health:100, kills:0, deaths:0, weapon:'ak47', alive:true, lastUpdate:Date.now()
+    }}
+  }).then(()=>{
     document.getElementById('map-select').style.display='none';
     document.getElementById('room-title').textContent='ROOM CREAT';
     document.getElementById('room-code-display').style.display='block';
     document.getElementById('room-code-display').textContent=roomCode;
-    document.getElementById('room-info').innerHTML='Trimite acest cod prietenilor sau link: <br><b style="color:#3498db">'+window.location.origin+'/'+roomCode+'</b>';
+    document.getElementById('room-info').innerHTML='Trimite codul sau link:<br><b style="color:#3498db">'+window.location.origin+'/'+roomCode+'</b>';
     document.getElementById('room-go-btn').style.display='inline-block';
     document.getElementById('room-go-btn').textContent='START JOC';
-
     listenRoomPlayers();
   }).catch(e=>{
     document.getElementById('room-info').textContent='Eroare: '+e.message;
@@ -307,22 +293,18 @@ function createRoom(mapIdx){
 
 function joinRoom(code){
   roomCode=code;
-  roomRef=db.ref('rooms/'+roomCode);
 
-  roomRef.once('value').then(snap=>{
-    if(!snap.exists()){
+  fbGet('rooms/'+roomCode).then(data=>{
+    if(!data){
       document.getElementById('room-info').textContent='Room-ul '+code+' nu există!';
       return;
     }
-    const data=snap.val();
 
-    // Add self as player
-    roomRef.child('players/'+myPlayerId).set({
+    // Add self
+    fbSet('rooms/'+roomCode+'/players/'+myPlayerId,{
       name:myPlayerName, x:0, y:2.5, z:80, rx:0, ry:0,
-      health:100, kills:0, deaths:0, weapon:'ak47', alive:true,
-      lastUpdate:Date.now()
+      health:100, kills:0, deaths:0, weapon:'ak47', alive:true, lastUpdate:Date.now()
     });
-    roomRef.child('players/'+myPlayerId).onDisconnect().remove();
 
     document.getElementById('join-input-area').style.display='none';
     document.getElementById('room-title').textContent='ROOM '+roomCode;
@@ -331,63 +313,53 @@ function joinRoom(code){
     const mapName=LEVELS[data.map]?LEVELS[data.map].name:'???';
     document.getElementById('room-info').textContent='Hartă: '+mapName+' | Așteptăm host-ul să pornească...';
 
-    // If already playing, join directly
     if(data.state==='playing'){
       isMultiplayer=true;
-      state.currentLevel=data.map;
       document.getElementById('room-screen').style.display='none';
       document.getElementById('main-menu').style.display='none';
       startMultiplayerDirect(data.map);
       return;
     }
 
-    // Check if I am host (creator left, I'm first)
-    const isHost=data.host===myPlayerId;
-    if(isHost){
-      document.getElementById('room-go-btn').style.display='inline-block';
-      document.getElementById('room-go-btn').textContent='START JOC';
-    } else {
-      document.getElementById('room-go-btn').style.display='none';
-    }
-
+    document.getElementById('room-go-btn').style.display='none';
     listenRoomPlayers();
-    // Listen for game start
-    roomRef.child('state').on('value',snap=>{
-      if(snap.val()==='playing'){
-        roomRef.child('state').off();
-        roomRef.once('value').then(s=>{
-          const rd=s.val();
-          isMultiplayer=true;
-          state.currentLevel=rd.map;
-          document.getElementById('room-screen').style.display='none';
-          document.getElementById('main-menu').style.display='none';
-          startMultiplayerDirect(rd.map);
-        });
-      }
-    });
+    // Poll for game start
+    const pollStart=setInterval(()=>{
+      fbGet('rooms/'+roomCode+'/state').then(st=>{
+        if(st==='playing'){
+          clearInterval(pollStart);
+          fbGet('rooms/'+roomCode+'/map').then(m=>{
+            isMultiplayer=true;
+            document.getElementById('room-screen').style.display='none';
+            document.getElementById('main-menu').style.display='none';
+            startMultiplayerDirect(m);
+          });
+        }
+      });
+    },1000);
   });
 }
 
 function listenRoomPlayers(){
-  roomRef.child('players').on('value',snap=>{
-    const players=snap.val()||{};
-    const count=Object.keys(players).length;
-    let html='Jucători ('+count+'):<br>';
-    Object.values(players).forEach(p=>{
-      html+='<span>'+p.name+'</span> ';
+  // Poll player list every 2s
+  const pollP=setInterval(()=>{
+    if(!roomCode){clearInterval(pollP);return;}
+    fbGet('rooms/'+roomCode+'/players').then(players=>{
+      if(!players)return;
+      const count=Object.keys(players).length;
+      let html='Jucători ('+count+'):<br>';
+      Object.values(players).forEach(p=>{html+='<span>'+(p.name||'?')+'</span> ';});
+      document.getElementById('room-players').innerHTML=html;
     });
-    document.getElementById('room-players').innerHTML=html;
-  });
+  },2000);
 }
 
 function startMultiplayerGame(){
-  // Host starts the game
-  roomRef.update({state:'playing'});
+  fbUpdate('rooms/'+roomCode,{state:'playing'});
   isMultiplayer=true;
   document.getElementById('room-screen').style.display='none';
-  roomRef.once('value').then(s=>{
-    const rd=s.val();
-    startMultiplayerDirect(rd.map);
+  fbGet('rooms/'+roomCode+'/map').then(m=>{
+    startMultiplayerDirect(m);
   });
 }
 
@@ -409,12 +381,16 @@ function startMultiplayerDirect(mapIdx){
   document.getElementById('enemies-left').innerHTML='ROOM: <span style="color:#3498db">'+roomCode+'</span>';
 }
 
-// Sync my position to Firebase
+// Sync my position to Firebase (send)
+let mpSendInterval=null, mpRecvInterval=null;
 function startMPSync(){
-  if(syncInterval)clearInterval(syncInterval);
-  syncInterval=setInterval(()=>{
-    if(!roomRef||!isMultiplayer||!isLocked)return;
-    roomRef.child('players/'+myPlayerId).update({
+  if(mpSendInterval)clearInterval(mpSendInterval);
+  if(mpRecvInterval)clearInterval(mpRecvInterval);
+
+  // Send my position every 100ms
+  mpSendInterval=setInterval(()=>{
+    if(!roomCode||!isMultiplayer||!isLocked)return;
+    fbUpdate('rooms/'+roomCode+'/players/'+myPlayerId,{
       x:+camera.position.x.toFixed(2),
       y:+camera.position.y.toFixed(2),
       z:+camera.position.z.toFixed(2),
@@ -427,38 +403,41 @@ function startMPSync(){
       alive:!state.gameOver||state.won,
       lastUpdate:Date.now()
     });
-  },80);
+  },100);
 
-  // Listen for other players
-  roomRef.child('players').on('child_added',snap=>{
-    if(snap.key===myPlayerId)return;
-    addRemotePlayer(snap.key,snap.val());
-  });
-  roomRef.child('players').on('child_changed',snap=>{
-    if(snap.key===myPlayerId){
-      // Someone hit me - check health
-      const d=snap.val();
-      if(d.health<state.health && d.health>=0){
-        state.health=d.health;
-        updateHUD();
-        const ov=document.getElementById('damage-overlay');
-        ov.style.border='15px solid rgba(255,0,0,0.5)';
-        setTimeout(()=>{ov.style.border='0px solid rgba(255,0,0,0)'},200);
-        if(state.health<=0&&!state.gameOver){
-          state.gameOver=true;
-          myDeaths++;
-          showMessage('AI MURIT!\nRespawn în 5s...','#ff0000',4000);
-          setTimeout(()=>mpRespawn(),5000);
+  // Receive other players every 100ms
+  mpRecvInterval=setInterval(()=>{
+    if(!roomCode||!isMultiplayer)return;
+    fbGet('rooms/'+roomCode+'/players').then(players=>{
+      if(!players)return;
+      const currentIds=new Set();
+      Object.entries(players).forEach(([id,data])=>{
+        if(id===myPlayerId){
+          // Check if someone damaged me
+          if(data.health<state.health && data.health>=0){
+            state.health=data.health;
+            updateHUD();
+            const ov=document.getElementById('damage-overlay');
+            ov.style.border='15px solid rgba(255,0,0,0.5)';
+            setTimeout(()=>{ov.style.border='0px solid rgba(255,0,0,0)'},200);
+            if(state.health<=0&&!state.gameOver){
+              state.gameOver=true;myDeaths++;
+              showMessage('AI MURIT!\nRespawn în 5s...','#ff0000',4000);
+              setTimeout(()=>mpRespawn(),5000);
+            }
+          }
+          return;
         }
-      }
-      return;
-    }
-    updateRemotePlayer(snap.key,snap.val());
-  });
-  roomRef.child('players').on('child_removed',snap=>{
-    if(snap.key===myPlayerId)return;
-    removeRemotePlayer(snap.key);
-  });
+        currentIds.add(id);
+        if(!otherPlayers[id])addRemotePlayer(id,data);
+        else updateRemotePlayer(id,data);
+      });
+      // Remove players that left
+      Object.keys(otherPlayers).forEach(id=>{
+        if(!currentIds.has(id))removeRemotePlayer(id);
+      });
+    });
+  },100);
 }
 
 function mpRespawn(){
@@ -574,9 +553,7 @@ function mpShootCheck(rc){
       spawnParticles(hit.point,0xff0000,5);
 
       // Reduce other player's health in Firebase
-      const pRef=roomRef.child('players/'+pid);
-      pRef.once('value').then(s=>{
-        const pd=s.val();
+      fbGet('rooms/'+roomCode+'/players/'+pid).then(pd=>{
         if(!pd||!pd.alive)return;
         let newHP=pd.health-dmg;
         if(newHP<=0){
@@ -584,15 +561,14 @@ function mpShootCheck(rc){
           state.kills++;
           updateHUD();
           addKillFeedEntry(isHead);
-          // Respawn them after 5s
           setTimeout(()=>{
-            pRef.update({health:100,alive:true,
+            fbUpdate('rooms/'+roomCode+'/players/'+pid,{health:100,alive:true,
               x:Math.cos(Math.random()*6.28)*40,
               z:Math.sin(Math.random()*6.28)*40
             });
           },5000);
         }
-        pRef.update({health:newHP,alive:newHP>0});
+        fbUpdate('rooms/'+roomCode+'/players/'+pid,{health:newHP,alive:newHP>0});
       });
       return true;
     }
@@ -602,9 +578,9 @@ function mpShootCheck(rc){
 
 // Scoreboard
 function updateScoreboard(){
-  if(!isMultiplayer||!roomRef)return;
-  roomRef.child('players').once('value').then(snap=>{
-    const players=snap.val()||{};
+  if(!isMultiplayer||!roomCode)return;
+  fbGet('rooms/'+roomCode+'/players').then(players=>{
+    if(!players)return;
     const body=document.getElementById('sb-body');
     body.innerHTML='';
     Object.entries(players).forEach(([id,p])=>{
@@ -748,7 +724,7 @@ document.addEventListener('pointerlockchange', () => {
       loadLevel(pendingLevelLoad);
       pendingLevelLoad = -1;
     }
-    if(isMultiplayer && !syncInterval){
+    if(isMultiplayer && !mpSendInterval){
       startMPSync();
     }
   } else {
