@@ -176,6 +176,7 @@ let hostConn = null; // client's connection to host
 let roomMapIdx = 0;
 const PLAYER_COLORS = [0x3498db, 0xe74c3c, 0x2ecc71, 0xf39c12, 0x9b59b6, 0x1abc9c, 0xe67e22, 0xecf0f1];
 const PEER_PREFIX = 'fpsgame_';
+let spawnPositions = [[0,80],[-10,60],[10,60],[0,40]]; // fallback
 
 // URL routing
 function checkURLRoom(){
@@ -298,21 +299,23 @@ function createRoom(mapIdx){
 
 function hostHandleData(fromId,d){
   if(d.type==='pos'){
-    // Relay position to all other clients
     d.id=fromId;
+    // Relay to all other clients
     Object.entries(connections).forEach(([pid,c])=>{
-      if(pid!==fromId)c.send(d);
+      if(pid!==fromId)try{c.send(d);}catch(e){}
     });
-    // Update on host screen too
+    // Render on host screen
     if(!otherPlayers[fromId])addRemotePlayer(fromId,d);
     else updateRemotePlayer(fromId,d);
   } else if(d.type==='hit'){
-    // Client says they hit someone
-    Object.entries(connections).forEach(([pid,c])=>c.send(d));
-    if(d.target===myPlayerId) handleGotHit(d.dmg);
+    // Relay hit to all
+    Object.entries(connections).forEach(([pid,c])=>{try{c.send(d);}catch(e){}});
+    if(d.target==='host'||d.target===myPlayerId) handleGotHit(d.dmg);
   } else if(d.type==='info'){
     d.id=fromId;
-    Object.entries(connections).forEach(([pid,c])=>{if(pid!==fromId)c.send(d);});
+    if(!otherPlayers[fromId])addRemotePlayer(fromId,{name:d.name,x:0,y:2.5,z:80,alive:true});
+    else if(otherPlayers[fromId].data) otherPlayers[fromId].data.name=d.name;
+    Object.entries(connections).forEach(([pid,c])=>{if(pid!==fromId)try{c.send(d);}catch(e){}});
     updatePlayerListUI();
   }
 }
@@ -359,23 +362,29 @@ function joinRoom(code){
 function clientHandleData(d){
   if(d.type==='welcome'){
     roomMapIdx=d.map;
-    document.getElementById('room-info').textContent='Hartă: '+LEVELS[d.map].name+' | Așteptăm...';
+    const mapName=LEVELS[d.map]?LEVELS[d.map].name:'???';
+    document.getElementById('room-info').textContent='Hartă: '+mapName+' | Așteptăm host-ul...';
     if(d.playing) startMultiplayerDirect(d.map);
   } else if(d.type==='start'){
-    isMultiplayer=true;
-    document.getElementById('room-screen').style.display='none';
     startMultiplayerDirect(d.map);
   } else if(d.type==='pos'){
-    if(!otherPlayers[d.id])addRemotePlayer(d.id,d);
-    else updateRemotePlayer(d.id,d);
+    if(d.id){
+      if(!otherPlayers[d.id])addRemotePlayer(d.id,d);
+      else updateRemotePlayer(d.id,d);
+    }
   } else if(d.type==='hostpos'){
-    const hid='host';
-    if(!otherPlayers[hid])addRemotePlayer(hid,d);
-    else updateRemotePlayer(hid,d);
-  } else if(d.type==='hit'&&d.target===myPlayerId){
-    handleGotHit(d.dmg);
+    if(!otherPlayers['host'])addRemotePlayer('host',d);
+    else updateRemotePlayer('host',d);
+  } else if(d.type==='hit'){
+    // Check if I'm the target (by my peer ID or playerId)
+    const myPeerId=peer?peer.id:'';
+    if(d.target===myPlayerId||d.target===myPeerId||d.target==='host')handleGotHit(d.dmg);
   } else if(d.type==='leave'){
     removeRemotePlayer(d.id);
+  } else if(d.type==='info'){
+    if(d.id){
+      if(!otherPlayers[d.id])addRemotePlayer(d.id,{name:d.name,x:0,y:2.5,z:80,alive:true});
+    }
   }
 }
 
@@ -461,9 +470,12 @@ function startMPSync(){
 
 function mpRespawn(){
   state.health=100;state.gameOver=false;
-  const angle=Math.random()*Math.PI*2;
-  const dist=30+Math.random()*40;
-  camera.position.set(Math.cos(angle)*dist,state.playerHeight,Math.sin(angle)*dist);
+  if(spawnPositions.length>0){
+    const sp=spawnPositions[Math.floor(Math.random()*spawnPositions.length)];
+    camera.position.set(sp[0],state.playerHeight,sp[1]);
+  } else {
+    camera.position.set(0,state.playerHeight,80);
+  }
   updateHUD();
   showMessage('RESPAWN!','#3498db',1000);
 }
@@ -842,7 +854,13 @@ function loadLevel(idx){
   lv.build();
 
   // Player start
-  camera.position.set(0,state.playerHeight,80);
+  // In MP, spawn at random bot position; in campaign, default spawn
+  if(isMultiplayer && spawnPositions.length>0){
+    const sp=spawnPositions[Math.floor(Math.random()*spawnPositions.length)];
+    camera.position.set(sp[0],state.playerHeight,sp[1]);
+  } else {
+    camera.position.set(0,state.playerHeight,80);
+  }
   camera.rotation.set(0,0,0);
   euler.set(0,0,0);
   camera.quaternion.setFromEuler(euler);
@@ -945,7 +963,7 @@ function buildLevel1(){
 
   // Spawn enemies
   const positions=[[-5,-30],[5,-30],[-15,-40],[15,-40],[0,-45],[-10,-20],[10,-20],[20,-40]];
-  positions.forEach(([x,z])=>createEnemy(x,z));
+  if(isMultiplayer){spawnPositions=positions;}else{positions.forEach(([x,z])=>createEnemy(x,z));}
 }
 
 // ===================== LEVEL 2: WEAPON DEPOT =====================
@@ -1014,7 +1032,7 @@ function buildLevel2(){
 
   const positions=[[-5,-32],[5,-32],[-15,-45],[15,-45],[0,-50],[-30,-45],[30,-45],
     [-10,-55],[10,-55],[0,-38],[-20,-35],[20,-35]];
-  positions.forEach(([x,z])=>createEnemy(x,z));
+  if(isMultiplayer){spawnPositions=positions;}else{positions.forEach(([x,z])=>createEnemy(x,z));}
 }
 
 // ===================== LEVEL 3: MILITARY BASE =====================
@@ -1098,7 +1116,7 @@ function buildLevel3(){
 
   const positions=[[-8,-28],[8,-28],[-10,-45],[10,-45],[0,-55],[-15,-55],[15,-55],
     [-22,-30],[22,-30],[-22,-62],[22,-62],[-15,-10],[15,-10],[0,5],[-10,20],[10,20]];
-  positions.forEach(([x,z])=>createEnemy(x,z));
+  if(isMultiplayer){spawnPositions=positions;}else{positions.forEach(([x,z])=>createEnemy(x,z));}
 }
 
 // ===================== LEVEL 4: NAVAL PORT =====================
@@ -1180,7 +1198,7 @@ function buildLevel4(){
   const positions=[[-10,-25],[10,-25],[0,-20],[-20,-15],[20,-15],
     [30,-50],[30,-65],[-25,-50],[0,10],[-20,15],[20,15],
     [-15,30],[5,30],[40,25],[40,35],[0,-35],[-30,5],[30,5],[15,25],[-10,35]];
-  positions.forEach(([x,z])=>createEnemy(x,z));
+  if(isMultiplayer){spawnPositions=positions;}else{positions.forEach(([x,z])=>createEnemy(x,z));}
 }
 
 // ===================== LEVEL 5: FINAL FORTRESS =====================
@@ -1284,7 +1302,7 @@ function buildLevel5(){
     [0,-65],[-20,-65],[20,-65],[-28,-50],[28,-50],[-10,-35],[10,-35],
     [0,-55],[-30,-30],[30,-30],[-12,-60],[12,-60],[0,-70],
     [-5,-50],[5,-50],[0,-40],[-15,-45],[15,-45]];
-  positions.forEach(([x,z])=>createEnemy(x,z));
+  if(isMultiplayer){spawnPositions=positions;}else{positions.forEach(([x,z])=>createEnemy(x,z));}
 }
 
 // ===================== ENEMIES =====================
