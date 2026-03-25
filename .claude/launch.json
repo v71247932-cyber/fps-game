@@ -1,0 +1,11 @@
+{
+  "version": "0.0.1",
+  "configurations": [
+    {
+      "name": "fps-game",
+      "runtimeExecutable": "php",
+      "runtimeArgs": ["-S", "localhost:8085", "-t", "."],
+      "port": 8085
+    }
+  ]
+}
