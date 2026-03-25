@@ -294,8 +294,19 @@ function createRoom(mapIdx){
 function joinRoom(code){
   roomCode=code;
 
+  // Show room screen immediately
+  document.getElementById('main-menu').style.display='none';
+  document.getElementById('room-screen').style.display='flex';
+  document.getElementById('join-input-area').style.display='none';
+  document.getElementById('map-select').style.display='none';
+  document.getElementById('room-title').textContent='Se conectează...';
+  document.getElementById('room-info').textContent='Se caută room-ul '+code+'...';
+  document.getElementById('room-code-display').style.display='none';
+  document.getElementById('room-go-btn').style.display='none';
+
   fbGet('rooms/'+roomCode).then(data=>{
     if(!data){
+      document.getElementById('room-title').textContent='EROARE';
       document.getElementById('room-info').textContent='Room-ul '+code+' nu există!';
       return;
     }
@@ -306,7 +317,6 @@ function joinRoom(code){
       health:100, kills:0, deaths:0, weapon:'ak47', alive:true, lastUpdate:Date.now()
     });
 
-    document.getElementById('join-input-area').style.display='none';
     document.getElementById('room-title').textContent='ROOM '+roomCode;
     document.getElementById('room-code-display').style.display='block';
     document.getElementById('room-code-display').textContent=roomCode;
@@ -316,7 +326,6 @@ function joinRoom(code){
     if(data.state==='playing'){
       isMultiplayer=true;
       document.getElementById('room-screen').style.display='none';
-      document.getElementById('main-menu').style.display='none';
       startMultiplayerDirect(data.map);
       return;
     }
