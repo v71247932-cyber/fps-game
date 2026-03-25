@@ -418,6 +418,11 @@ function startMultiplayerDirect(mapIdx){
   state.gameOver=false;state.won=false;
   state.reloading=false;state.canShoot=true;
   pendingLevelLoad=mapIdx;
+  // Hide ALL menus
+  document.getElementById('main-menu').style.display='none';
+  document.getElementById('room-screen').style.display='none';
+  document.getElementById('level-select').style.display='none';
+  // Show blocker for "click to start"
   document.getElementById('blocker').style.display='flex';
   document.getElementById('blocker').querySelector('h1').textContent='MULTIPLAYER';
   document.getElementById('blocker').querySelector('.subtitle').textContent=LEVELS[mapIdx].name+' | Room '+roomCode;
