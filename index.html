@@ -364,20 +364,18 @@ function startMultiplayerGame(){
 }
 
 function startMultiplayerDirect(mapIdx){
-  // Setup game for multiplayer
   state.currentLevel=mapIdx;
   state.health=state.maxHealth;
   state.ammo=state.maxAmmo;
   state.score=0;state.kills=0;myDeaths=0;
   state.gameOver=false;state.won=false;
   state.reloading=false;state.canShoot=true;
+  pendingLevelLoad=mapIdx; // THIS loads the level when pointer lock is acquired
   document.getElementById('blocker').style.display='flex';
   document.getElementById('blocker').querySelector('h1').textContent='MULTIPLAYER';
   document.getElementById('blocker').querySelector('.subtitle').textContent=LEVELS[mapIdx].name+' | Room '+roomCode;
   document.getElementById('blocker').querySelector('.start-btn').textContent='▶ Click pentru a intra ◀';
   blockerMode='start';
-
-  // Change HUD for multiplayer
   document.getElementById('enemies-left').innerHTML='ROOM: <span style="color:#3498db">'+roomCode+'</span>';
 }
 
