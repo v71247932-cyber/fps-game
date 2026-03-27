@@ -1368,6 +1368,8 @@ function createEnemy(x,z){
   gun.position.set(0.8,1.8,0.5);group.add(gun);
 
   group.position.set(x,0,z);
+  group.userData.isEnemy=true;
+  group.traverse(child=>{if(child.isMesh)child.userData.isEnemy=true;});
 
   // Scale difficulty with level
   const lvMult=1+state.currentLevel*0.25;
@@ -2067,40 +2069,59 @@ function goNextLevel(){
 }
 
 function enemyShoot(enemy){
-  const dir=new THREE.Vector3().subVectors(camera.position,enemy.mesh.position).normalize();
+  // Double-check LOS right before shooting
   const dist=camera.position.distanceTo(enemy.mesh.position);
+  if(!checkLOS(enemy.mesh.position,camera.position,dist))return;
+
+  const dir=new THREE.Vector3().subVectors(camera.position,enemy.mesh.position).normalize();
   const acc=Math.min(0.15,0.05+dist*0.002);
   dir.x+=(Math.random()-0.5)*acc;dir.y+=(Math.random()-0.5)*acc;
+  dir.normalize();
 
   const start=enemy.mesh.position.clone().add(new THREE.Vector3(0,2,0));
-  const end=start.clone().add(dir.clone().multiplyScalar(80));
-  const tGeo=new THREE.BufferGeometry().setFromPoints([start,end]);
-  const tracer=new THREE.Line(tGeo,new THREE.LineBasicMaterial({color:0xff4444,transparent:true,opacity:0.5}));
-  scene.add(tracer);setTimeout(()=>scene.remove(tracer),100);
 
+  // Muzzle flash
   const fl=new THREE.PointLight(0xff4400,2,8);
   fl.position.copy(start);scene.add(fl);setTimeout(()=>scene.remove(fl),50);
 
-  // Check if wall blocks bullet path to player
-  const dirNorm=dir.clone().normalize();
-  const distToPlayer=camera.position.distanceTo(start);
-  const wallRC=new THREE.Raycaster(start,dirNorm,0.1,distToPlayer);
-  const allSolid=levelMeshes.filter(m=>m.isMesh&&m.geometry&&m.geometry.type!=='PlaneGeometry');
-  const wallBlock=wallRC.intersectObjects(allSolid);
+  // Check bullet path for wall collision
+  const allSolid=[];
+  scene.traverse(obj=>{
+    if(!obj.isMesh||!obj.geometry)return;
+    if(obj.geometry.type==='PlaneGeometry')return;
+    if(obj.userData&&obj.userData.isEnemy)return;
+    if(obj.parent&&obj.parent.userData&&obj.parent.userData.isEnemy)return;
+    const bb=new THREE.Box3().setFromObject(obj);
+    if(bb.min.y>30)return;
+    allSolid.push(obj);
+  });
+
+  const wallRC=new THREE.Raycaster(start,dir,0.5,80);
+  wallRC.firstHitOnly=true;
+  const wallBlock=wallRC.intersectObjects(allSolid,true);
+
+  let tracerEnd;
   if(wallBlock.length>0){
-    // Bullet hit wall - no damage to player
+    // Bullet hit wall - tracer stops at wall, no damage
+    tracerEnd=wallBlock[0].point;
     spawnParticles(wallBlock[0].point,0xffaa44,2);
-    // Shorten tracer to wall hit
   } else {
+    // No wall hit - check if bullet is close enough to player
+    tracerEnd=start.clone().add(dir.clone().multiplyScalar(80));
     const toP=camera.position.clone().sub(start);
-    const proj=toP.dot(dirNorm);
+    const proj=toP.dot(dir);
     if(proj>0){
-      const closest=start.clone().add(dirNorm.clone().multiplyScalar(proj));
+      const closest=start.clone().add(dir.clone().multiplyScalar(proj));
       if(closest.distanceTo(camera.position)<2){
         takeDamage(5+Math.random()*8+state.currentLevel*2);
       }
     }
   }
+
+  // Draw tracer (always stops at wall or max range)
+  const tGeo=new THREE.BufferGeometry().setFromPoints([start,tracerEnd]);
+  const tracer=new THREE.Line(tGeo,new THREE.LineBasicMaterial({color:0xff4444,transparent:true,opacity:0.5}));
+  scene.add(tracer);setTimeout(()=>scene.remove(tracer),100);
 }
 
 function takeDamage(amt){
@@ -2306,19 +2327,44 @@ function raycastWalls(origin,dir,maxDist){
 }
 
 function checkLOS(fromPos,toPos,dist){
-  // Check line of sight at 3 different heights
-  const heights=[1,2,3];
-  for(let h of heights){
-    const from=new THREE.Vector3(fromPos.x,h,fromPos.z);
-    const to=new THREE.Vector3(toPos.x,h,toPos.z);
-    const dir=new THREE.Vector3().subVectors(to,from).normalize();
-    const d=from.distanceTo(to);
-    const rc=new THREE.Raycaster(from,dir,0,d);
-    // Check against ALL solid meshes, not just wallMeshList
-    const allSolid=levelMeshes.filter(m=>m.isMesh&&m.geometry&&m.geometry.type!=='PlaneGeometry');
-    const hits=rc.intersectObjects(allSolid);
-    if(hits.length>0)return false;
-  }
+  // Get all solid meshes once (exclude ground, enemies, particles)
+  const allSolid=[];
+  scene.traverse(obj=>{
+    if(!obj.isMesh||!obj.geometry)return;
+    if(obj.geometry.type==='PlaneGeometry')return;
+    // Skip enemy meshes (they have userData.isEnemy or are children of enemy groups)
+    if(obj.userData&&obj.userData.isEnemy)return;
+    if(obj.parent&&obj.parent.userData&&obj.parent.userData.isEnemy)return;
+    // Skip very small objects and objects high up (clouds)
+    const bb=new THREE.Box3().setFromObject(obj);
+    if(bb.min.y>30)return;
+    const size=new THREE.Vector3();bb.getSize(size);
+    if(size.y<0.5)return;
+    allSolid.push(obj);
+  });
+
+  // Check line of sight from enemy chest (y=1.5) to player chest (y=2)
+  const from=new THREE.Vector3(fromPos.x,1.5,fromPos.z);
+  const to=new THREE.Vector3(toPos.x,2,toPos.z);
+  const dir=new THREE.Vector3().subVectors(to,from);
+  const d=dir.length();
+  dir.normalize();
+  const rc=new THREE.Raycaster(from,dir,0.5,d);
+  rc.firstHitOnly=true;
+  const hits=rc.intersectObjects(allSolid,true);
+  if(hits.length>0)return false;
+
+  // Also check at head height
+  const from2=new THREE.Vector3(fromPos.x,2.5,fromPos.z);
+  const to2=new THREE.Vector3(toPos.x,2.5,toPos.z);
+  const dir2=new THREE.Vector3().subVectors(to2,from2);
+  const d2=dir2.length();
+  dir2.normalize();
+  const rc2=new THREE.Raycaster(from2,dir2,0.5,d2);
+  rc2.firstHitOnly=true;
+  const hits2=rc2.intersectObjects(allSolid,true);
+  if(hits2.length>0)return false;
+
   return true;
 }
 
